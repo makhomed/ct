@@ -1,0 +1,27 @@
+
+__pycache__/
+*.py[cod]
+
+dist/
+*.egg-info/
+
+.tox/
+.cache/
+htmlcov/
+.coverage
+
+# Sphinx documentation
+docs/_build/
+
+# For IntelliJ IDEs (basically PyCharm)
+.idea/
+
+# For Visual Studio Code
+.vscode/
+
+# Vim editor swap files
+*.swp
+
+# Mac
+.DS_Store
+
