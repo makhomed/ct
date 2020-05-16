@@ -1,7 +1,7 @@
 ct
 ==
 
-ct is management tool for systemd containers with ZFS storage.
+ct is management tool for systemd-nspawn containers with ZFS storage.
 
-Development Status :: 1 - Planning
+Development Status :: 4 - Beta
 
