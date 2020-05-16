@@ -1,0 +1,206 @@
+#!/usr/bin/python3
+
+import os
+import os.path
+import sys
+import subprocess
+
+
+def to_bytes(obj):
+    if obj is None:
+        return None
+    if isinstance(obj, bytes):
+        return obj
+    elif isinstance(obj, int):
+        return str(obj).encode('utf-8')
+    elif isinstance(obj, str):
+        return obj.encode('utf-8')
+    else:
+        raise TypeError(f"obj must be a str or bytes type, not '{type(obj)}'")
+
+
+def to_text(obj):
+    if isinstance(obj, str):
+        return obj
+    elif isinstance(obj, bytes):
+        return obj.decode('utf-8')
+    else:
+        raise TypeError(f"obj must be a bytes or str type, not '{type(obj)}'")
+
+
+def run(command, *, stdin=None, can_fail=False):
+    command = ["/bin/bash", "-c", command]
+    p = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    try:
+        LOCAL_COMMAND_TIMEOUT = 600
+        stdout_bytes, stderr_bytes = p.communicate(to_bytes(stdin), LOCAL_COMMAND_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        p.kill()
+        stdout_bytes, stderr_bytes = p.communicate()
+    result = Result(p.returncode, stdout_bytes, stderr_bytes)
+    if result or can_fail:
+        return result
+    else:
+        raise RuntimeError(f"Unexpected returncode '{p.returncode}'\ncommand: {command}\nstdout: {stdout_bytes}\nstderr: {stderr_bytes}")
+
+
+class Result:
+    def __init__(self, returncode, stdout_bytes, stderr_bytes):
+        self.returncode = returncode
+        self.stdout_bytes = stdout_bytes
+        self.stderr_bytes = stderr_bytes
+        self.stdout_raw = stdout_bytes.decode(encoding="utf-8", errors="replace")
+        self.stderr_raw = stderr_bytes.decode(encoding="utf-8", errors="replace")
+        self.stdout = self.stdout_raw.strip()
+        self.stderr = self.stderr_raw.strip()
+
+    def __bool__(self):
+        return self.returncode == 0
+
+
+class Containers:
+    def __init__(self):
+        self.names = dict()
+        self.read_containers()
+        self.read_running_containers()
+        self.read_aliases()
+        self.read_ips()
+        self.read_hostnames()
+
+    def read_containers(self):
+        self.containers = list()
+        stdout = run("zfs list -H -o name -r tank/containers").stdout
+        for line in stdout.splitlines():
+            if line == "tank/containers":
+                continue
+            container = line.split('/')[-1]
+            if container in self.names:
+                raise RuntimeError(f'Container {container} already defined as alias')
+            self.names[container] = container
+            self.containers.append(container)
+
+    def read_running_containers(self):
+        self.running_containers = set()
+        lines = run("machinectl list --no-legend --no-pager").stdout.splitlines()
+        for line in lines:
+            container = line.split()[0]
+            self.running_containers.add(container)
+
+    def read_aliases(self):
+        self.alias_to_container = dict()
+        self.container_to_alias = dict()
+        for container in self.containers:
+            if os.path.isfile(f'/tank/containers/{container}/alias'):
+                with open(f'/tank/containers/{container}/alias') as alias_file:
+                    alias = alias_file.read().strip()
+                    if alias in self.names:
+                        raise RuntimeError(f'Alias {alias} already defined as container name')
+                    self.names[alias] = container
+                    self.alias_to_container[alias] = container
+                    self.container_to_alias[container] = alias
+
+    def translate(self, names):
+        translated = list()
+        for name in names:
+            if name in self.names:
+                translated.append(self.names[name])
+            else:
+                translated.append(name)
+        return translated
+
+    def read_ips(self):
+        self.ips = dict()
+        for container in self.containers:
+            self.ips[container] = list()
+            if os.path.isfile(f"/tank/containers/{container}/root/etc/systemd/network/00-host0.network"):
+                with open(f"/tank/containers/{container}/root/etc/systemd/network/00-host0.network") as ip_file:
+                    lines = ip_file.read().strip().splitlines()
+                    for line in lines:
+                        if line.startswith('Address='):
+                            ip = line.split('=')[1].split('/')[0]
+                            self.ips[container].append(ip)
+
+    def read_hostnames(self):
+        self.hostnames = dict()
+        for container in self.containers:
+            if os.path.isfile(f"/etc/systemd/nspawn/{container}.nspawn"):
+                with open(f"/etc/systemd/nspawn/{container}.nspawn") as nspawn_file:
+                    lines = nspawn_file.read().strip().splitlines()
+                    for line in lines:
+                        if line.startswith('Hostname='):
+                            hostname = line.split('=')[1].strip()
+                            self.hostnames[container] = hostname
+
+    def list_containers(self):
+        aliases = list()
+        for container in self.containers:
+            if container in self.container_to_alias:
+                aliases.append(self.container_to_alias[container])
+            else:
+                aliases.append('')
+        ips = list()
+        for container in self.containers:
+            if len(self.ips[container]) > 0:
+                ips.append(self.ips[container][0])
+            else:
+                ips.append('')
+        max_container_name_len = len(max(self.containers, key=len))
+        max_alias_name_len = len(max(aliases, key=len))
+        max_ip_len = len(max(ips, key=len))
+        for container, alias, ip in zip(self.containers, aliases, ips):
+            if container in self.running_containers:
+                status = 'run'
+            else:
+                status = '---'
+            hostname = self.hostnames[container]
+            print(f" {status}  {container:{max_container_name_len}}  {alias:{max_alias_name_len}}  {ip:{max_ip_len}}  {hostname}")
+        
+
+    def run(self):
+        if len(sys.argv) == 1:
+            self.list_containers()
+        elif len(sys.argv) == 2 and sys.argv[1] in self.names:
+            os.execvp('machinectl', ['machinectl', '-q', 'shell', self.names[sys.argv[1]]])
+        elif len(sys.argv) > 2 and (sys.argv[1] == 'restart' or sys.argv[1] == 'r'):
+            containers = self.translate(sys.argv[2:])
+            for container in containers:
+                if container in self.running_containers:
+                    run(f"machinectl stop {container}")
+                run(f"machinectl start {container}")
+        elif len(sys.argv) > 2 and sys.argv[1] in ['status', 'show', 'start', 'stop', 'enable', 'disable']:
+            os.execvp('machinectl', ['machinectl', sys.argv[1]] + self.translate(sys.argv[2:]))
+
+
+""" TODO
+
+ct
+
+ct 101
+
+ct create 101 
+
+ct destroy 101 
+
+ct enable 101
+
+ct start 101...
+
+ct stop 101...
+
+ct restart 101
+
+ct exec 101 ...
+
+ct manage 101 set-alias alias
+
+ct manage 105 add-ip 172.17.107.105
+ct manage 105 del-ip 172.17.107.105
+
+"""
+
+def main():
+    Containers().run()
+
+
+if __name__=='__main__':
+    main()
