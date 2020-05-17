@@ -4,6 +4,7 @@ import os
 import os.path
 import sys
 import subprocess
+import time
 
 
 def to_bytes(obj):
@@ -62,6 +63,7 @@ class Containers:
     def __init__(self):
         self.names = dict()
         self.read_containers()
+        self.read_enabled_containers()
         self.read_running_containers()
         self.read_aliases()
         self.read_ips()
@@ -79,6 +81,12 @@ class Containers:
             self.names[container] = container
             self.containers.append(container)
 
+    def read_enabled_containers(self):
+        self.enabled_containers = set()
+        for container in self.containers:
+            if os.path.isfile(f"/etc/systemd/system/machines.target.wants/systemd-nspawn@{container}.service"):
+                self.enabled_containers.add(container)
+
     def read_running_containers(self):
         self.running_containers = set()
         lines = run("machinectl list --no-legend --no-pager").stdout.splitlines()
@@ -90,6 +98,7 @@ class Containers:
         self.alias_to_container = dict()
         self.container_to_alias = dict()
         for container in self.containers:
+            self.container_to_alias[container] = ''
             if os.path.isfile(f'/tank/containers/{container}/alias'):
                 with open(f'/tank/containers/{container}/alias') as alias_file:
                     alias = alias_file.read().strip()
@@ -98,15 +107,6 @@ class Containers:
                     self.names[alias] = container
                     self.alias_to_container[alias] = container
                     self.container_to_alias[container] = alias
-
-    def translate(self, names):
-        translated = list()
-        for name in names:
-            if name in self.names:
-                translated.append(self.names[name])
-            else:
-                translated.append(name)
-        return translated
 
     def read_ips(self):
         self.ips = dict()
@@ -123,13 +123,11 @@ class Containers:
     def read_hostnames(self):
         self.hostnames = dict()
         for container in self.containers:
-            if os.path.isfile(f"/etc/systemd/nspawn/{container}.nspawn"):
-                with open(f"/etc/systemd/nspawn/{container}.nspawn") as nspawn_file:
-                    lines = nspawn_file.read().strip().splitlines()
-                    for line in lines:
-                        if line.startswith('Hostname='):
-                            hostname = line.split('=')[1].strip()
-                            self.hostnames[container] = hostname
+            self.hostnames[container] = ''
+            if os.path.isfile(f"/tank/containers/{container}/root/etc/hostname"):
+                with open(f"/tank/containers/{container}/root/etc/hostname") as hostname_file:
+                    hostname = hostname_file.read().strip()
+                    self.hostnames[container] = hostname
 
     def list_containers(self):
         aliases = list()
@@ -147,60 +145,204 @@ class Containers:
         max_container_name_len = len(max(self.containers, key=len))
         max_alias_name_len = len(max(aliases, key=len))
         max_ip_len = len(max(ips, key=len))
+        print()
         for container, alias, ip in zip(self.containers, aliases, ips):
-            if container in self.running_containers:
-                status = 'run'
+            if container in self.enabled_containers:
+                enabled = 'enabled'
             else:
-                status = '---'
+                enabled = '-------'
+            if container in self.running_containers:
+                running = 'running'
+            else:
+                running = '-------'
             hostname = self.hostnames[container]
-            print(f" {status}  {container:{max_container_name_len}}  {alias:{max_alias_name_len}}  {ip:{max_ip_len}}  {hostname}")
-        
+            print(f" {enabled}  {running}  {container:{max_container_name_len}}  {alias:{max_alias_name_len}}  {ip:{max_ip_len}}  {hostname}")
+        print()
+
+    def read_bridge_ip(self):
+        if not os.path.isfile("/etc/systemd/network/venet0.network"):
+            raise RuntimeError("Not found bridge interface file /etc/systemd/network/venet0.network")
+        with open("/etc/systemd/network/venet0.network") as venet0_file:
+            lines = venet0_file.read().strip().splitlines()
+            for line in lines:
+                if line.startswith('Address='):
+                    ip = line.split('=')[1].split('/')[0]
+                    return ip
+
+    def write_network_config(self, container):
+        bridge_ip = self.read_bridge_ip()
+        stat = os.stat(f"/tank/containers/{container}/root/etc/passwd")
+        if not os.path.isdir(f"/tank/containers/{container}/root/etc/systemd/network"):
+            run(f"mkdir -p /tank/containers/{container}/root/etc/systemd/network")
+            os.chown(f"/tank/containers/{container}/root/etc/systemd/network", stat.st_uid, stat.st_gid)
+            os.chmod(f"/tank/containers/{container}/root/etc/systemd/network", 0o755)
+        bridge_ip = self.read_bridge_ip()
+        subnet = bridge_ip.rsplit('.', 1)[0]
+        ip = f"{subnet}.{container}"
+        with open(f"/tank/containers/{container}/root/etc/systemd/network/00-host0.network", "w") as config_file:
+            config_file.write("[Match]\n")
+            config_file.write("Name=host0\n")
+            config_file.write("\n")
+            config_file.write("[Network]\n")
+            config_file.write(f"Address={ip}/24\n")
+            config_file.write(f"Gateway={bridge_ip}\n")
+        os.chown(f"/tank/containers/{container}/root/etc/systemd/network/00-host0.network", stat.st_uid, stat.st_gid)
+        os.chmod(f"/tank/containers/{container}/root/etc/systemd/network/00-host0.network", 0o644)
+
+    def write_nspawn_config(self, container):
+        if not os.path.isdir("/etc/systemd/nspawn"):
+            run("mkdir -p /etc/systemd/nspawn")
+        with open(f"/etc/systemd/nspawn/{container}.nspawn", "w") as nspawn_file:
+            nspawn_file.write("[Exec]\n")
+            nspawn_file.write("ResolvConf=copy-host\n")
+            nspawn_file.write("\n")
+            nspawn_file.write("[Network]\n")
+            nspawn_file.write("Bridge=venet0\n")
+
+    def create_container(self, container):
+        assert int(container) >= 1
+        assert int(container) <= 253
+        container = str(int(container))
+        if container in self.containers:
+            raise RuntimeError(f"Container {container} already exists")
+        if container in self.alias_to_container:
+            raise RuntimeError(f"Container name {container} already used as alias")
+        run(f"zfs create tank/containers/{container}")
+        run(f"mkdir -p /tank/containers/{container}/root")
+        run(f"yum -y --releasever=8 --installroot=/tank/containers/{container}/root install centos-release systemd passwd yum dnf-plugins-core vim-enhanced bash bash-completion less psmisc openssh-server iputils iproute net-tools openssh-clients mc tar epel-release htop systemd-networkd rootfiles rsyslog cronie tar")
+        self.write_network_config(container)
+        self.write_nspawn_config(container)
+        run(f"ln -s /tank/containers/{container}/root /var/lib/machines/{container}")
+        run(f"machinectl enable {container}")
+        run(f"machinectl start {container}")
+        time.sleep(1)
+        run(f"systemd-run --machine {container} /usr/bin/timedatectl set-timezone Europe/Kiev")
+        run(f"systemd-run --machine {container} /usr/bin/localectl set-locale en_US.UTF-8")
+
+    def destroy_container(self, container):
+        if container not in self.containers:
+            raise RuntimeError(f"Can't destroy unknown container {container}")
+        if container in self.running_containers:
+            raise RuntimeError(f"Can't destroy running container {container}")
+        if container in self.enabled_containers:
+            raise RuntimeError(f"Can't destroy enabled container {container}")
+        alias = self.container_to_alias[container]
+        hostname = self.hostnames[container]
+        ips = " ".join(self.ips[container])
+        print()
+        print(f"Container : {container}")
+        print(f"Alias     : {alias}")
+        print(f"IPs       : {ips}")
+        print(f"Hostname  : {hostname}")
+        print()
+        s = input(f"DESTROY CONTAINER {container} ?\n\nPlease enter word 'DESTROY': ")
+        if s != 'DESTROY':
+            sys.exit(1)
+        run(f"rm -f /var/lib/machines/{container}")
+        run(f"rm -f /etc/systemd/nspawn/{container}.nspawn")
+        run(f"zfs destroy -r tank/containers/{container}")
+
+    def rename_container(self, old_container, new_container):
+        if old_container not in self.containers:
+            raise RuntimeError(f"Can't rename unknown container {old_container}")
+        if old_container in self.running_containers:
+            raise RuntimeError(f"Can't rename running container {old_container}")
+        if new_container in self.enabled_containers:
+            raise RuntimeError(f"Can't rename to existed container {new_container}")
+        if old_container in self.enabled_containers:
+            run(f"machinectl disable {old_container}")
+        run(f"zfs rename tank/containers/{old_container} tank/containers/{new_container}")
+        run(f"mv /etc/systemd/nspawn/{old_container}.nspawn /etc/systemd/nspawn/{new_container}.nspawn")
+        run(f"rm -f /var/lib/machines/{old_container}")
+        run(f"ln -s /tank/containers/{new_container}/root /var/lib/machines/{new_container}")
+        self.write_network_config(new_container)
+        if old_container in self.enabled_containers:
+            run(f"machinectl enable {new_container}")
+
+    def clone_container(self, old_container, new_container):
+        pass
+
+    def manage(self, container, command, argument):
+        if command == 'set-alias':
+            with open(f'/tank/containers/{container}/alias', "w") as alias_file:
+                alias_file.write(argument.strip())
+        elif command == 'set-hostname':
+            if container in self.running_containers:
+                run(f"systemd-run --machine {container} /usr/bin/hostnamectl set-hostname {argument}")
+            else:
+                with open(f"/tank/containers/{container}/root/etc/hostname", "w") as hostname_file:
+                    hostname_file.write(argument.strip()+'\n')
+                stat = os.stat(f"/tank/containers/{container}/root/etc/passwd")
+                os.chown(f"/tank/containers/{container}/root/etc/hostname", stat.st_uid, stat.st_gid)
+                os.chmod(f"/tank/containers/{container}/root/etc/hostname", 0o644)
+        else:
+            self.usage()
+
+    def usage(self):
+        print()
+        print("usage:")
+        print()
+        print("    ct")
+        print("    ct CTID")
+        print()
+        print("    ct create CTID")
+        print("    ct destroy CTID")
+        print()
+        print("    ct enable CTID")
+        print("    ct disable CTID")
+        print()
+        print("    ct start CTID")
+        print("    ct stop CTID")
+        print("    ct r[estart] CTID")
+        print()
+        print("    ct status CTID")
+        print("    ct show CTID")
+        print()
+        print("    ct rename OLDID NEWID")
+        print("    ct clone OLDID NEWID")
+        print()
+        print("    ct m[anage] CTID set-alias <alias>")
+        print("    ct m[anage] CTID set-hostname <hostname>")
+        print()
 
     def run(self):
         if len(sys.argv) == 1:
             self.list_containers()
         elif len(sys.argv) == 2 and sys.argv[1] in self.names:
             os.execvp('machinectl', ['machinectl', '-q', 'shell', self.names[sys.argv[1]]])
-        elif len(sys.argv) > 2 and (sys.argv[1] == 'restart' or sys.argv[1] == 'r'):
-            containers = self.translate(sys.argv[2:])
-            for container in containers:
-                if container in self.running_containers:
-                    run(f"machinectl stop {container}")
-                run(f"machinectl start {container}")
-        elif len(sys.argv) > 2 and sys.argv[1] in ['status', 'show', 'start', 'stop', 'enable', 'disable']:
-            os.execvp('machinectl', ['machinectl', sys.argv[1]] + self.translate(sys.argv[2:]))
+        elif len(sys.argv) == 3 and sys.argv[1] in ['status', 'show', 'start', 'stop', 'enable', 'disable'] and sys.argv[2] in self.names:
+            os.execvp('machinectl', ['machinectl', sys.argv[1], self.names[sys.argv[2]]])
+        elif len(sys.argv) == 3 and (sys.argv[1] == 'restart' or sys.argv[1] == 'r') and sys.argv[2] in self.names:
+            container = self.names[sys.argv[2]]
+            if container in self.running_containers:
+                run(f"machinectl stop {container}")
+            run(f"machinectl start {container}")
+        elif len(sys.argv) == 3 and sys.argv[1] == 'create':
+            container = sys.argv[2]
+            self.create_container(container)
+        elif len(sys.argv) == 3 and sys.argv[1] == 'destroy':
+            container = sys.argv[2]
+            self.destroy_container(container)
+        elif len(sys.argv) == 4 and sys.argv[1] == 'rename':
+            old_container = sys.argv[2]
+            new_container = sys.argv[3]
+            self.rename_container(old_container, new_container)
+        elif len(sys.argv) == 4 and sys.argv[1] == 'clone':
+            old_container = sys.argv[2]
+            new_container = sys.argv[3]
+            self.clone_container(old_container, new_container)
+        elif len(sys.argv) == 5 and (sys.argv[1] == 'manage' or sys.argv[1] == 'm') and sys.argv[2] in self.names:
+            container = self.names[sys.argv[2]]
+            command = sys.argv[3]
+            argument = sys.argv[4]
+            self.manage(container, command, argument)
+        else:
+            self.usage()
 
-
-""" TODO
-
-ct
-
-ct 101
-
-ct create 101 
-
-ct destroy 101 
-
-ct enable 101
-
-ct start 101...
-
-ct stop 101...
-
-ct restart 101
-
-ct exec 101 ...
-
-ct manage 101 set-alias alias
-
-ct manage 105 add-ip 172.17.107.105
-ct manage 105 del-ip 172.17.107.105
-
-"""
 
 def main():
     Containers().run()
 
 
-if __name__=='__main__':
+if __name__ == '__main__':
     main()
