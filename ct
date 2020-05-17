@@ -1,10 +1,12 @@
 #!/usr/bin/python3
 
+import datetime
 import os
 import os.path
 import sys
 import subprocess
 import time
+import uuid
 
 
 def to_bytes(obj):
@@ -209,7 +211,14 @@ class Containers:
             raise RuntimeError(f"Container name {container} already used as alias")
         run(f"zfs create tank/containers/{container}")
         run(f"mkdir -p /tank/containers/{container}/root")
-        run(f"yum -y --releasever=8 --installroot=/tank/containers/{container}/root install centos-release systemd passwd yum dnf-plugins-core vim-enhanced bash bash-completion less psmisc openssh-server iputils iproute net-tools openssh-clients mc tar epel-release htop systemd-networkd rootfiles rsyslog cronie tar")
+        packages = """
+                centos-release systemd passwd yum dnf-plugins-core vim-enhanced
+                bash bash-completion less psmisc openssh-server iputils iproute
+                net-tools openssh-clients mc tar epel-release htop systemd-networkd
+                rootfiles rsyslog cronie
+                """
+        packages = " ".join((" ".join(packages.splitlines())).split())
+        run(f"yum -y --releasever=8 --installroot=/tank/containers/{container}/root install {packages}")
         self.write_network_config(container)
         self.write_nspawn_config(container)
         run(f"ln -s /tank/containers/{container}/root /var/lib/machines/{container}")
@@ -244,11 +253,11 @@ class Containers:
 
     def rename_container(self, old_container, new_container):
         if old_container not in self.containers:
-            raise RuntimeError(f"Can't rename unknown container {old_container}")
+            raise RuntimeError(f"Can't rename not existing container {old_container}")
+        if new_container in self.containers:
+            raise RuntimeError(f"Can't rename to existing container {new_container}")
         if old_container in self.running_containers:
             raise RuntimeError(f"Can't rename running container {old_container}")
-        if new_container in self.enabled_containers:
-            raise RuntimeError(f"Can't rename to existed container {new_container}")
         if old_container in self.enabled_containers:
             run(f"machinectl disable {old_container}")
         run(f"zfs rename tank/containers/{old_container} tank/containers/{new_container}")
@@ -260,21 +269,50 @@ class Containers:
             run(f"machinectl enable {new_container}")
 
     def clone_container(self, old_container, new_container):
-        pass
+        if old_container not in self.containers:
+            raise RuntimeError(f"Can't clone not existing container {old_container}")
+        if new_container in self.containers:
+            raise RuntimeError(f"Can't clone to existing container {new_container}")
+        if old_container in self.running_containers:
+            raise RuntimeError(f"Can't clone running container {old_container}")
+
+        snapshot_name = datetime.datetime.now().strftime('ct.clone.%Y-%m-%d.%H:%M:%S.tmp.'+str(uuid.uuid4()))
+        original_snapshot = f"tank/containers/{old_container}@{snapshot_name}"
+        clone_snapshot = f"tank/containers/{new_container}@{snapshot_name}"
+        run(f"zfs snapshot {original_snapshot}")
+        run(f"zfs send -c -e {original_snapshot} | zfs receive -F {clone_snapshot}")
+        run(f"zfs destroy {original_snapshot}")
+        run(f"zfs destroy {clone_snapshot}")
+        self.write_network_config(new_container)
+        self.write_nspawn_config(new_container)
+        run(f"ln -s /tank/containers/{new_container}/root /var/lib/machines/{new_container}")
+
+        if self.container_to_alias[old_container]:
+            self.write_alias(new_container, "cloned-" + self.container_to_alias[old_container])
+        if self.hostnames[old_container]:
+            self.write_hostname(new_container, "cloned-" + self.hostnames[old_container])
+        if old_container in self.enabled_containers:
+            run(f"machinectl enable {new_container}")
+
+    def write_hostname(self, container, hostname):
+        if container in self.running_containers:
+            run(f"systemd-run --machine {container} /usr/bin/hostnamectl set-hostname {hostname}")
+        else:
+            with open(f"/tank/containers/{container}/root/etc/hostname", "w") as hostname_file:
+                hostname_file.write(hostname.strip()+'\n')
+            stat = os.stat(f"/tank/containers/{container}/root/etc/passwd")
+            os.chown(f"/tank/containers/{container}/root/etc/hostname", stat.st_uid, stat.st_gid)
+            os.chmod(f"/tank/containers/{container}/root/etc/hostname", 0o644)
+
+    def write_alias(self, container, alias):
+        with open(f'/tank/containers/{container}/alias', "w") as alias_file:
+            alias_file.write(alias.strip()+'\n')
 
     def manage(self, container, command, argument):
         if command == 'set-alias':
-            with open(f'/tank/containers/{container}/alias', "w") as alias_file:
-                alias_file.write(argument.strip())
+            self.write_alias(container, argument)
         elif command == 'set-hostname':
-            if container in self.running_containers:
-                run(f"systemd-run --machine {container} /usr/bin/hostnamectl set-hostname {argument}")
-            else:
-                with open(f"/tank/containers/{container}/root/etc/hostname", "w") as hostname_file:
-                    hostname_file.write(argument.strip()+'\n')
-                stat = os.stat(f"/tank/containers/{container}/root/etc/passwd")
-                os.chown(f"/tank/containers/{container}/root/etc/hostname", stat.st_uid, stat.st_gid)
-                os.chmod(f"/tank/containers/{container}/root/etc/hostname", 0o644)
+            self.write_hostname(container, argument)
         else:
             self.usage()
 
