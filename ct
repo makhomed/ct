@@ -82,6 +82,8 @@ class Containers:
                 raise RuntimeError(f'Container {container} already defined as alias')
             self.names[container] = container
             self.containers.append(container)
+        self.containers.sort(key=lambda x: int(x))
+
 
     def read_enabled_containers(self):
         self.enabled_containers = set()
@@ -158,7 +160,7 @@ class Containers:
             else:
                 running = '-------'
             hostname = self.hostnames[container]
-            print(f" {enabled}  {running}  {container:{max_container_name_len}}  {alias:{max_alias_name_len}}  {ip:{max_ip_len}}  {hostname}")
+            print(f" {enabled}  {running}  {container:>{max_container_name_len}}  {alias:{max_alias_name_len}}  {ip:>{max_ip_len}}  {hostname}")
         print()
 
     def read_bridge_ip(self):
@@ -294,6 +296,10 @@ class Containers:
         if old_container in self.enabled_containers:
             run(f"machinectl enable {new_container}")
 
+    def write_alias(self, container, alias):
+        with open(f'/tank/containers/{container}/alias', "w") as alias_file:
+            alias_file.write(alias.strip()+'\n')
+
     def write_hostname(self, container, hostname):
         if container in self.running_containers:
             run(f"systemd-run --machine {container} /usr/bin/hostnamectl set-hostname {hostname}")
@@ -304,15 +310,28 @@ class Containers:
             os.chown(f"/tank/containers/{container}/root/etc/hostname", stat.st_uid, stat.st_gid)
             os.chmod(f"/tank/containers/{container}/root/etc/hostname", 0o644)
 
-    def write_alias(self, container, alias):
-        with open(f'/tank/containers/{container}/alias', "w") as alias_file:
-            alias_file.write(alias.strip()+'\n')
+    def write_authorized_keys(self, container, filename):
+        if not os.path.isfile(filename):
+            raise RuntimeError(f"Not found authorized_keys file {filename}")
+        with open(filename) as public_keys_file:
+            public_keys = public_keys_file.read()
+        stat = os.stat(f"/tank/containers/{container}/root/etc/passwd")
+        if not os.path.isdir(f"/tank/containers/{container}/root/root/.ssh"):
+            run(f"mkdir -p /tank/containers/{container}/root/root/.ssh")
+            os.chown(f"/tank/containers/{container}/root/root/.ssh", stat.st_uid, stat.st_gid)
+            os.chmod(f"/tank/containers/{container}/root/root/.ssh", 0o700)
+        with open(f"/tank/containers/{container}/root/root/.ssh/authorized_keys", "w") as authorized_keys_file:
+            authorized_keys_file.write(public_keys)
+        os.chown(f"/tank/containers/{container}/root/root/.ssh/authorized_keys", stat.st_uid, stat.st_gid)
+        os.chmod(f"/tank/containers/{container}/root/root/.ssh/authorized_keys", 0o600)
 
     def manage(self, container, command, argument):
         if command == 'set-alias':
             self.write_alias(container, argument)
         elif command == 'set-hostname':
             self.write_hostname(container, argument)
+        elif command == 'set-authorized_keys':
+            self.write_authorized_keys(container, argument)
         else:
             self.usage()
 
@@ -341,6 +360,7 @@ class Containers:
         print()
         print("    ct m[anage] CTID set-alias <alias>")
         print("    ct m[anage] CTID set-hostname <hostname>")
+        print("    ct m[anage] CTID set-authorized_keys <filename>")
         print()
 
     def run(self):
