@@ -142,9 +142,13 @@ class Containers:
         aliases = list()
         for container in self.containers:
             if container in self.container_to_alias:
-                aliases.append(self.container_to_alias[container])
+                alias = self.container_to_alias[container]
+                if alias == '':
+                    aliases.append('-')
+                else:
+                    aliases.append(alias)
             else:
-                aliases.append('')
+                aliases.append('-')
         ips = list()
         for container in self.containers:
             if len(self.ips[container]) > 0:
