@@ -208,6 +208,7 @@ class Containers:
         with open(f"/etc/systemd/nspawn/{container}.nspawn", "w") as nspawn_file:
             nspawn_file.write("[Exec]\n")
             nspawn_file.write("ResolvConf=copy-host\n")
+            nspawn_file.write("LimitNOFILE=infinity\n")
             nspawn_file.write("\n")
             nspawn_file.write("[Network]\n")
             nspawn_file.write("Bridge=venet0\n")
