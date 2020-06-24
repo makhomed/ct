@@ -221,7 +221,7 @@ class Containers:
             raise RuntimeError(f"Container {container} already exists")
         if container in self.alias_to_container:
             raise RuntimeError(f"Container name {container} already used as alias")
-        run(f"zfs create tank/containers/{container}")
+        run(f"zfs create -o recordsize=4K tank/containers/{container}")
         run(f"mkdir -p /tank/containers/{container}/root")
         packages = """
                 centos-release systemd passwd yum dnf-plugins-core vim-enhanced
@@ -290,9 +290,10 @@ class Containers:
 
         snapshot_name = datetime.datetime.now().strftime('ct.clone.%Y-%m-%d.%H:%M:%S.tmp.'+str(uuid.uuid4()))
         original_snapshot = f"tank/containers/{old_container}@{snapshot_name}"
+        clone_filesystem = f"tank/containers/{new_container}"
         clone_snapshot = f"tank/containers/{new_container}@{snapshot_name}"
         run(f"zfs snapshot {original_snapshot}")
-        run(f"zfs send -c -e {original_snapshot} | zfs receive -F {clone_snapshot}")
+        run(f"zfs send --replicate --raw {original_snapshot} | zfs receive -F {clone_filesystem}")
         run(f"zfs destroy {original_snapshot}")
         run(f"zfs destroy {clone_snapshot}")
         self.write_network_config(new_container)
@@ -377,7 +378,7 @@ class Containers:
         if len(sys.argv) == 1:
             self.list_containers()
         elif len(sys.argv) == 2 and sys.argv[1] in self.names:
-            os.execvp('machinectl', ['machinectl', '-q', 'shell', self.names[sys.argv[1]]])
+            os.execvp('machinectl', ['machinectl', '-q', '--setenv=SHELL=/bin/bash', 'shell', self.names[sys.argv[1]]])
         elif len(sys.argv) == 3 and sys.argv[1] in ['status', 'show', 'start', 'stop', 'enable', 'disable'] and sys.argv[2] in self.names:
             os.execvp('machinectl', ['machinectl', sys.argv[1], self.names[sys.argv[2]]])
         elif len(sys.argv) == 3 and (sys.argv[1] == 'restart' or sys.argv[1] == 'r') and sys.argv[2] in self.names:
