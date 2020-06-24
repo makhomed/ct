@@ -227,7 +227,7 @@ class Containers:
                 centos-release systemd passwd yum dnf-plugins-core vim-enhanced
                 bash bash-completion less psmisc openssh-server iputils iproute
                 net-tools openssh-clients mc tar epel-release htop systemd-networkd
-                rootfiles rsyslog cronie
+                rootfiles rsyslog cronie man
                 """
         packages = " ".join((" ".join(packages.splitlines())).split())
         run(f"yum -y --releasever=8 --installroot=/tank/containers/{container}/root install {packages}")
