@@ -209,6 +209,7 @@ class Containers:
             nspawn_file.write("[Exec]\n")
             nspawn_file.write("ResolvConf=copy-host\n")
             nspawn_file.write("LimitNOFILE=infinity\n")
+            nspawn_file.write("LimitNICE=40\n")
             nspawn_file.write("\n")
             nspawn_file.write("[Network]\n")
             nspawn_file.write("Bridge=venet0\n")
