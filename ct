@@ -199,6 +199,7 @@ class Containers:
             config_file.write("[Network]\n")
             config_file.write(f"Address={ip}/24\n")
             config_file.write(f"Gateway={bridge_ip}\n")
+            config_file.write(f"LinkLocalAddressing=no\n")
         os.chown(f"/tank/containers/{container}/root/etc/systemd/network/00-host0.network", stat.st_uid, stat.st_gid)
         os.chmod(f"/tank/containers/{container}/root/etc/systemd/network/00-host0.network", 0o644)
 
@@ -386,7 +387,21 @@ class Containers:
             container = self.names[sys.argv[2]]
             if container in self.running_containers:
                 run(f"machinectl stop {container}")
+            running = True
+            while running:
+                self.read_running_containers()
+                if container not in self.running_containers:
+                    running = False
+                else:
+                    time.sleep(0.5)
             run(f"machinectl start {container}")
+            stopped = True
+            while stopped:
+                self.read_running_containers()
+                if container in self.running_containers:
+                    stopped = False
+                else:
+                    time.sleep(0.5)
         elif len(sys.argv) == 3 and sys.argv[1] == 'create':
             container = sys.argv[2]
             self.create_container(container)
