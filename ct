@@ -376,32 +376,49 @@ class Containers:
         print("    ct m[anage] CTID set-authorized_keys <filename>")
         print()
 
+
+    def start(self, container):
+        if container not in self.running_containers:
+            run(f"machinectl start {container}")
+        stopped = True
+        while stopped:
+            self.read_running_containers()
+            if container in self.running_containers:
+                stopped = False
+            else:
+                time.sleep(0.1)
+
+    def stop(self, container):
+        if container in self.running_containers:
+            run(f"machinectl stop {container}")
+        running = True
+        while running:
+            self.read_running_containers()
+            if container not in self.running_containers:
+                running = False
+            else:
+                time.sleep(0.1)
+
+    def restart(self, container):
+        self.stop(container)
+        self.start(container)
+
     def run(self):
         if len(sys.argv) == 1:
             self.list_containers()
         elif len(sys.argv) == 2 and sys.argv[1] in self.names:
             os.execvp('machinectl', ['machinectl', '-q', '--setenv=SHELL=/bin/bash', 'shell', self.names[sys.argv[1]]])
-        elif len(sys.argv) == 3 and sys.argv[1] in ['status', 'show', 'start', 'stop', 'enable', 'disable'] and sys.argv[2] in self.names:
+        elif len(sys.argv) == 3 and sys.argv[1] in ['status', 'show', 'enable', 'disable'] and sys.argv[2] in self.names:
             os.execvp('machinectl', ['machinectl', sys.argv[1], self.names[sys.argv[2]]])
+        elif len(sys.argv) == 3 and sys.argv[1] == 'start' and sys.argv[2] in self.names:
+            container = self.names[sys.argv[2]]
+            self.start(container)
+        elif len(sys.argv) == 3 and sys.argv[1] == 'stop' and sys.argv[2] in self.names:
+            container = self.names[sys.argv[2]]
+            self.stop(container)
         elif len(sys.argv) == 3 and (sys.argv[1] == 'restart' or sys.argv[1] == 'r') and sys.argv[2] in self.names:
             container = self.names[sys.argv[2]]
-            if container in self.running_containers:
-                run(f"machinectl stop {container}")
-            running = True
-            while running:
-                self.read_running_containers()
-                if container not in self.running_containers:
-                    running = False
-                else:
-                    time.sleep(0.5)
-            run(f"machinectl start {container}")
-            stopped = True
-            while stopped:
-                self.read_running_containers()
-                if container in self.running_containers:
-                    stopped = False
-                else:
-                    time.sleep(0.5)
+            self.restart(container)
         elif len(sys.argv) == 3 and sys.argv[1] == 'create':
             container = sys.argv[2]
             self.create_container(container)
