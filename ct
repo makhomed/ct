@@ -76,21 +76,21 @@ class Containers:
         if size <= 1024:
             return f"{size:4d} bytes"
         if size <= 1024*1024:
-            return f"{size/1024:6.2f} KiB"
+            return f"{size/1024:7.2f} KiB"
         if size <= 1024*1024*1024:
-            return f"{size/1024/1024:6.2f} MiB"
+            return f"{size/1024/1024:7.2f} MiB"
         if size <= 1024*1024*1024*1024:
-            return f"{size/1024/1024/1024:6.2f} GiB"
+            return f"{size/1024/1024/1024:7.2f} GiB"
         if size <= 1024*1024*1024*1024*1024:
-            return f"{size/1024/1024/1024/1024:6.2f} TiB"
+            return f"{size/1024/1024/1024/1024:7.2f} TiB"
         if size <= 1024*1024*1024*1024*1024*1024:
-            return f"{size/1024/1024/1024/1024/1024:6.2f} PiB"
+            return f"{size/1024/1024/1024/1024/1024:7.2f} PiB"
         if size <= 1024*1024*1024*1024*1024*1024*1024:
-            return f"{size/1024/1024/1024/1024/1024/1024:6.2f} EiB"
+            return f"{size/1024/1024/1024/1024/1024/1024:7.2f} EiB"
         if size <= 1024*1024*1024*1024*1024*1024*1024*1024:
-            return f"{size/1024/1024/1024/1024/1024/1024/1024:6.2f} ZiB"
+            return f"{size/1024/1024/1024/1024/1024/1024/1024:7.2f} ZiB"
         if size <= 1024*1024*1024*1024*1024*1024*1024*1024*1024:
-            return f"{size/1024/1024/1024/1024/1024/1024/1024/1024:6.2f} YiB"
+            return f"{size/1024/1024/1024/1024/1024/1024/1024/1024:7.2f} YiB"
 
     def read_containers(self):
         self.containers = list()
