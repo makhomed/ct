@@ -185,8 +185,8 @@ class Containers:
         max_ip_len = len(max(ips, key=len))
 
         print()
-        used =  "      USED"
-        refer = "     REFER"
+        used =  "       USED"
+        refer = "      REFER"
         enabled = "ENABLED"
         running = "RUNNING"
         container = "CT"
