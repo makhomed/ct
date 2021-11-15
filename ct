@@ -1,4 +1,4 @@
-#!/usr/bin/python3
+#!/usr/bin/python3 -u
 
 import datetime
 import os
@@ -71,19 +71,44 @@ class Containers:
         self.read_ips()
         self.read_hostnames()
 
+    def hr(self, size):
+        size = int(size)
+        if size <= 1024:
+            return f"{size:4d} bytes"
+        if size <= 1024*1024:
+            return f"{size/1024:6.2f} KiB"
+        if size <= 1024*1024*1024:
+            return f"{size/1024/1024:6.2f} MiB"
+        if size <= 1024*1024*1024*1024:
+            return f"{size/1024/1024/1024:6.2f} GiB"
+        if size <= 1024*1024*1024*1024*1024:
+            return f"{size/1024/1024/1024/1024:6.2f} TiB"
+        if size <= 1024*1024*1024*1024*1024*1024:
+            return f"{size/1024/1024/1024/1024/1024:6.2f} PiB"
+        if size <= 1024*1024*1024*1024*1024*1024*1024:
+            return f"{size/1024/1024/1024/1024/1024/1024:6.2f} EiB"
+        if size <= 1024*1024*1024*1024*1024*1024*1024*1024:
+            return f"{size/1024/1024/1024/1024/1024/1024/1024:6.2f} ZiB"
+        if size <= 1024*1024*1024*1024*1024*1024*1024*1024*1024:
+            return f"{size/1024/1024/1024/1024/1024/1024/1024/1024:6.2f} YiB"
+
     def read_containers(self):
         self.containers = list()
-        stdout = run("zfs list -H -o name -r tank/containers").stdout
+        self.used = dict()
+        self.refer = dict()
+        stdout = run("zfs list -H -p -o name,used,refer -r tank/containers").stdout
         for line in stdout.splitlines():
-            if line == "tank/containers":
+            name, used, refer = line.split('\t')
+            if name == "tank/containers":
                 continue
-            container = line.split('/')[-1]
+            container = name.split('/')[-1]
             if container in self.names:
                 raise RuntimeError(f'Container {container} already defined as alias')
             self.names[container] = container
             self.containers.append(container)
+            self.used[container] = self.hr(used)
+            self.refer[container] = self.hr(refer)
         self.containers.sort(key=lambda x: int(x))
-
 
     def read_enabled_containers(self):
         self.enabled_containers = set()
@@ -158,7 +183,19 @@ class Containers:
         max_container_name_len = len(max(self.containers, key=len))
         max_alias_name_len = len(max(aliases, key=len))
         max_ip_len = len(max(ips, key=len))
+
         print()
+        used =  "      USED"
+        refer = "     REFER"
+        enabled = "ENABLED"
+        running = "RUNNING"
+        container = "CT"
+        alias = "ALIAS"
+        ip = "IP_ADDRESS"
+        hostname = "HOSTNAME"
+        print(f"{used}  {refer}  {enabled}  {running}  {container:>{max_container_name_len}}  {alias:{max_alias_name_len}}  {ip:>{max_ip_len}}  {hostname}")
+        print()
+
         for container, alias, ip in zip(self.containers, aliases, ips):
             if container in self.enabled_containers:
                 enabled = 'enabled'
@@ -169,7 +206,9 @@ class Containers:
             else:
                 running = '-------'
             hostname = self.hostnames[container]
-            print(f" {enabled}  {running}  {container:>{max_container_name_len}}  {alias:{max_alias_name_len}}  {ip:>{max_ip_len}}  {hostname}")
+            used = self.used[container]
+            refer = self.refer[container]
+            print(f"{used}  {refer}  {enabled}  {running}  {container:>{max_container_name_len}}  {alias:{max_alias_name_len}}  {ip:>{max_ip_len}}  {hostname}")
         print()
 
     def read_bridge_ip(self):
