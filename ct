@@ -95,10 +95,11 @@ class Containers:
     def read_containers(self):
         self.containers = list()
         self.used = dict()
+        self.avail = dict()
         self.refer = dict()
-        stdout = run("zfs list -H -p -o name,used,refer -r tank/containers").stdout
+        stdout = run("zfs list -H -p -o name,used,avail,refer -r tank/containers").stdout
         for line in stdout.splitlines():
-            name, used, refer = line.split('\t')
+            name, used, avail, refer = line.split('\t')
             if name == "tank/containers":
                 continue
             container = name.split('/')[-1]
@@ -107,6 +108,7 @@ class Containers:
             self.names[container] = container
             self.containers.append(container)
             self.used[container] = self.hr(used)
+            self.avail[container] = self.hr(avail)
             self.refer[container] = self.hr(refer)
         self.containers.sort(key=lambda x: int(x))
 
@@ -186,6 +188,7 @@ class Containers:
 
         print()
         used =  "       USED"
+        avail = "      AVAIL"
         refer = "      REFER"
         enabled = "ENABLED"
         running = "RUNNING"
@@ -193,7 +196,7 @@ class Containers:
         alias = "ALIAS"
         ip = "IP_ADDRESS"
         hostname = "HOSTNAME"
-        print(f"{used}  {refer}  {enabled}  {running}  {container:>{max_container_name_len}}  {alias:{max_alias_name_len}}  {ip:>{max_ip_len}}  {hostname}")
+        print(f"{used}  {avail}  {refer}  {enabled}  {running}  {container:>{max_container_name_len}}  {alias:{max_alias_name_len}}  {ip:>{max_ip_len}}  {hostname}")
         print()
 
         for container, alias, ip in zip(self.containers, aliases, ips):
@@ -207,8 +210,9 @@ class Containers:
                 running = '-------'
             hostname = self.hostnames[container]
             used = self.used[container]
+            avail = self.avail[container]
             refer = self.refer[container]
-            print(f"{used}  {refer}  {enabled}  {running}  {container:>{max_container_name_len}}  {alias:{max_alias_name_len}}  {ip:>{max_ip_len}}  {hostname}")
+            print(f"{used}  {avail}  {refer}  {enabled}  {running}  {container:>{max_container_name_len}}  {alias:{max_alias_name_len}}  {ip:>{max_ip_len}}  {hostname}")
         print()
 
     def read_bridge_ip(self):
