@@ -9,41 +9,21 @@ import time
 import uuid
 
 
-def to_bytes(obj):
-    if obj is None:
-        return None
-    if isinstance(obj, bytes):
-        return obj
-    elif isinstance(obj, int):
-        return str(obj).encode('utf-8')
-    elif isinstance(obj, str):
-        return obj.encode('utf-8')
-    else:
-        raise TypeError(f"obj must be a str or bytes type, not '{type(obj)}'")
-
-
-def to_text(obj):
-    if isinstance(obj, str):
-        return obj
-    elif isinstance(obj, bytes):
-        return obj.decode('utf-8')
-    else:
-        raise TypeError(f"obj must be a bytes or str type, not '{type(obj)}'")
-
-
-def run(command, *, stdin=None, can_fail=False):
+def run(command, *, can_fail=False):
     command = ["/bin/bash", "-c", command]
-    p = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    try:
-        stdout_bytes, stderr_bytes = p.communicate(to_bytes(stdin), timeout=None)
-    except subprocess.TimeoutExpired:
-        p.kill()
-        stdout_bytes, stderr_bytes = p.communicate()
+    p = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, close_fds=True, cwd='/')
+    stdout_bytes, stderr_bytes = p.communicate()
     result = Result(p.returncode, stdout_bytes, stderr_bytes)
     if result or can_fail:
         return result
     else:
         raise RuntimeError(f"Unexpected returncode '{p.returncode}'\ncommand: {command}\nstdout: {stdout_bytes}\nstderr: {stderr_bytes}")
+
+
+def run_args(args):
+    p = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, close_fds=True, cwd='/')
+    stdout_bytes, stderr_bytes = p.communicate()
+    return Result(p.returncode, stdout_bytes, stderr_bytes)
 
 
 class Result:
@@ -422,7 +402,7 @@ class Containers:
         print("    ct m[anage] CTID set-hostname <hostname>")
         print("    ct m[anage] CTID set-authorized_keys <filename>")
         print()
-        print("    ct exec CTID|all <command>")
+        print("    ct exec CTID|all <command> [<argv1>] [<argv2>]...")
         print()
 
 
@@ -456,16 +436,24 @@ class Containers:
         for container in self.containers:
             print(container)
 
-    def exec_in_container(self, container, command):
+    def exec_in_container_helper(self, container, args):
+        systemd_run_args = [ '/usr/bin/systemd-run', '--pipe', '--wait', '--quiet', f'--machine={container}' ]
+        full_args = systemd_run_args + args
+        result = run_args(full_args)
+        lines = result.stdout.split("\n")
+        for line in lines:
+            if result.returncode != 0:
+                print(f"[returncode: {result.returncode}] {container}: {line}")
+            else:
+                print(f"{container}: {line}")
+
+    def exec_in_container(self, container, args):
         if container == 'all':
             for container in self.containers:
-                lines = run(f"/usr/bin/systemd-run --pipe --wait --quiet --machine={container} {command}").stdout.split("\n")
-                for line in lines:
-                    print(f"{container}: {line}")
+                self.exec_in_container_helper(container, args)
         else:
             container = self.names[container]
-            print(run(f"/usr/bin/systemd-run --pipe --wait --quiet --machine={container} {command}").stdout)
-
+            self.exec_in_container_helper(container, args)
 
     def run(self):
         if len(sys.argv) == 1:
@@ -474,7 +462,7 @@ class Containers:
             self.ct_list()
         elif len(sys.argv) > 3 and sys.argv[1] == 'exec' and (sys.argv[2] in self.names or sys.argv[2] == 'all'):
             container = sys.argv[2]
-            self.exec_in_container(container, ' '.join(sys.argv[3:]))
+            self.exec_in_container(container, sys.argv[3:])
         elif len(sys.argv) == 2 and sys.argv[1] in self.names:
             os.execvp('machinectl', ['machinectl', '-q', '--setenv=SHELL=/bin/bash', 'shell', self.names[sys.argv[1]]])
         elif len(sys.argv) == 3 and sys.argv[1] in ['status', 'show', 'enable', 'disable'] and sys.argv[2] in self.names:
