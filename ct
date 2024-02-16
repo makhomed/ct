@@ -82,6 +82,8 @@ class Containers:
             if name == "tank/containers":
                 continue
             container = name.split('/')[-1]
+            if container.endswith('-dump'):
+                continue
             if container in self.names:
                 raise RuntimeError(f'Container {container} already defined as alias')
             self.names[container] = container
